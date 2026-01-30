@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 date: 2026-01-29
 decision-makers: [project maintainers]
 consulted: []
@@ -57,6 +57,24 @@ Chosen option: "Option 1: Schema-driven detection with tflint-aligned project st
 | Rule structure | 150+ individual rules | Single generic rule | Schema-driven detection |
 | Code generation | Auto-generate from API specs | Embed provider schema | ForceNew is already in schema |
 | Detection scope | Static config validation | Old vs new comparison | Different problem domain |
+
+### Schema Version Strategy
+
+The plugin embeds a single provider schema version (typically the latest). This creates a potential mismatch when users run the plugin against repositories using older provider versions, since ForceNew behavior can change between versions.
+
+**Considered alternatives:**
+1. **Runtime schema extraction** - Extract schema from the repo's actual provider at runtime. Most accurate but requires terraform binary, provider download, and adds latency.
+2. **Bundle multiple schemas** - Ship schemas for major versions and select based on the repo's version constraint. More accurate but increases binary size and maintenance.
+3. **External schema service** - Fetch schemas from a CDN/API. Accurate but requires network access and external infrastructure.
+4. **Single embedded schema** - Ship one schema version, document the limitation.
+
+**Decision:** Single embedded schema (option 4), because:
+- Simplicity aligns with MVP goals
+- Matches tflint-ruleset-azurerm's approach
+- Avoids runtime complexity and external dependencies
+- Users typically keep plugins updated alongside providers
+
+**Limitation:** ForceNew detection may be inaccurate for repositories using provider versions that differ significantly from the embedded schema version. Users should keep their plugin version aligned with their provider version for best accuracy.
 
 ### Consequences
 
