@@ -1,0 +1,109 @@
+name: Update Schema
+
+on:
+  schedule:
+    # Run weekly on Monday at 9:00 UTC
+    - cron: '0 9 * * 1'
+  workflow_dispatch:
+    inputs:
+      azurerm_version:
+        description: 'Azure RM provider version (e.g., 4.0.0). Leave empty for latest.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-schema:
+    name: Update Azure RM Schema
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+
+      - name: Create Terraform config
+        run: |
+          mkdir -p /tmp/terraform-azurerm
+          cd /tmp/terraform-azurerm
+
+          if [ -n "${{ inputs.azurerm_version }}" ]; then
+            VERSION_CONSTRAINT="= ${{ inputs.azurerm_version }}"
+          else
+            VERSION_CONSTRAINT=">= 4.0"
+          fi
+
+          cat > main.tf << EOF
+          terraform {
+            required_providers {
+              azurerm = {
+                source  = "hashicorp/azurerm"
+                version = "${VERSION_CONSTRAINT}"
+              }
+            }
+          }
+          EOF
+
+      - name: Initialize Terraform
+        run: |
+          cd /tmp/terraform-azurerm
+          terraform init
+
+      - name: Extract schema
+        run: |
+          cd /tmp/terraform-azurerm
+          go run ${{ github.workspace }}/tools/extract-schema/main.go \
+            -output ${{ github.workspace }}/schema/azurerm.json.gz
+
+      - name: Get provider version
+        id: provider-version
+        run: |
+          cd /tmp/terraform-azurerm
+          VERSION=$(terraform version -json | jq -r '.provider_selections["registry.terraform.io/hashicorp/azurerm"]')
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Check for changes
+        id: changes
+        run: |
+          if git diff --quiet schema/azurerm.json.gz; then
+            echo "changed=false" >> $GITHUB_OUTPUT
+          else
+            echo "changed=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Create Pull Request
+        if: steps.changes.outputs.changed == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          commit-message: 'chore: update azurerm schema to ${{ steps.provider-version.outputs.version }}'
+          title: 'chore: update azurerm schema to ${{ steps.provider-version.outputs.version }}'
+          body: |
+            This PR updates the embedded Azure RM provider schema to version ${{ steps.provider-version.outputs.version }}.
+
+            ## Changes
+            - Updated `schema/azurerm.json.gz` with new schema
+
+            ## Testing
+            - [ ] Schema loads correctly
+            - [ ] Tests pass with new schema
+            - [ ] ForceNew detection works for new/changed resources
+
+            ---
+            This PR was automatically created by the [Update Schema workflow](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}).
+          branch: chore/update-schema-${{ steps.provider-version.outputs.version }}
+          delete-branch: true
+          labels: |
+            automated
+            schema-update
