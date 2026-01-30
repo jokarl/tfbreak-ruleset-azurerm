@@ -4,7 +4,7 @@ go 1.23.12
 
 require (
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/jokarl/tfbreak-plugin-sdk v0.2.0
+	github.com/jokarl/tfbreak-plugin-sdk v0.2.1
 	github.com/zclconf/go-cty v1.16.3
 )
 
