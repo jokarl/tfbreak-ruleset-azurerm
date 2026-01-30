@@ -1,6 +1,6 @@
 module github.com/jokarl/tfbreak-ruleset-azurerm
 
-go 1.23.10
+go 1.23.12
 
 require (
 	github.com/hashicorp/hcl/v2 v2.24.0
