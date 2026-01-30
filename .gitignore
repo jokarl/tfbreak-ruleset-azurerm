@@ -8,6 +8,9 @@
 *.so
 *.dylib
 
+# Compiled plugin binary
+tfbreak-ruleset-azurerm
+
 # Test binary, built with `go test -c`
 *.test
 
