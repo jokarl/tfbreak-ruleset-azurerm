@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/jokarl/tfbreak-plugin-sdk/helper"
+	"github.com/jokarl/tfbreak-plugin-sdk/hclext"
 	"github.com/jokarl/tfbreak-plugin-sdk/tflint"
+	"github.com/zclconf/go-cty/cty"
 )
 
 func TestForceNew_Name(t *testing.T) {
@@ -195,4 +197,146 @@ resource "aws_s3_bucket" "example" {
 
 	// Non-azurerm resources should not be checked
 	helper.AssertNoIssues(t, runner.Issues)
+}
+
+func TestForceNew_AttributeRemoved(t *testing.T) {
+	rule := NewAzurermForceNewRule()
+
+	runner := helper.TestRunner(t,
+		map[string]string{
+			"main.tf": `
+resource "azurerm_resource_group" "example" {
+    name     = "my-rg"
+    location = "westeurope"
+}`,
+		},
+		map[string]string{
+			"main.tf": `
+resource "azurerm_resource_group" "example" {
+    name = "my-rg"
+}`,
+		},
+	)
+
+	err := rule.Check(runner)
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	// Removing a ForceNew attribute should be detected
+	if len(runner.Issues) == 0 {
+		t.Error("Expected issue to be emitted when ForceNew attribute is removed")
+	}
+}
+
+func TestForceNew_AttributeAdded(t *testing.T) {
+	rule := NewAzurermForceNewRule()
+
+	runner := helper.TestRunner(t,
+		map[string]string{
+			"main.tf": `
+resource "azurerm_resource_group" "example" {
+    name = "my-rg"
+}`,
+		},
+		map[string]string{
+			"main.tf": `
+resource "azurerm_resource_group" "example" {
+    name     = "my-rg"
+    location = "westeurope"
+}`,
+		},
+	)
+
+	err := rule.Check(runner)
+	if err != nil {
+		t.Fatalf("Check returned error: %v", err)
+	}
+
+	// Adding a ForceNew attribute should be detected
+	if len(runner.Issues) == 0 {
+		t.Error("Expected issue to be emitted when ForceNew attribute is added")
+	}
+}
+
+// =============================================================================
+// Unit tests for helper functions
+// =============================================================================
+
+func TestFormatCtyValue(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    cty.Value
+		expected string
+	}{
+		{"string", cty.StringVal("hello"), "hello"},
+		{"number int", cty.NumberIntVal(42), "42"},
+		{"number float", cty.NumberFloatVal(3.14), "3.14"},
+		{"bool true", cty.BoolVal(true), "true"},
+		{"bool false", cty.BoolVal(false), "false"},
+		{"null", cty.NullVal(cty.String), "<null>"},
+		{"unknown", cty.UnknownVal(cty.String), "<unknown>"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := formatCtyValue(tt.value)
+			if result != tt.expected {
+				t.Errorf("formatCtyValue(%v) = %q, want %q", tt.value, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestEvalAttr(t *testing.T) {
+	t.Run("nil attribute", func(t *testing.T) {
+		result := evalAttr(nil)
+		if result != "<not set>" {
+			t.Errorf("evalAttr(nil) = %q, want %q", result, "<not set>")
+		}
+	})
+
+	t.Run("attribute with Value", func(t *testing.T) {
+		attr := &hclext.Attribute{
+			Name:  "test",
+			Value: cty.StringVal("from-value"),
+		}
+		result := evalAttr(attr)
+		if result != "from-value" {
+			t.Errorf("evalAttr with Value = %q, want %q", result, "from-value")
+		}
+	})
+
+	t.Run("attribute with null Value", func(t *testing.T) {
+		attr := &hclext.Attribute{
+			Name:  "test",
+			Value: cty.NullVal(cty.String),
+		}
+		result := evalAttr(attr)
+		if result != "<null>" {
+			t.Errorf("evalAttr with null Value = %q, want %q", result, "<null>")
+		}
+	})
+
+	t.Run("attribute with unknown Value", func(t *testing.T) {
+		attr := &hclext.Attribute{
+			Name:  "test",
+			Value: cty.UnknownVal(cty.String),
+		}
+		result := evalAttr(attr)
+		if result != "<unknown>" {
+			t.Errorf("evalAttr with unknown Value = %q, want %q", result, "<unknown>")
+		}
+	})
+
+	t.Run("attribute with no Value or Expr", func(t *testing.T) {
+		attr := &hclext.Attribute{
+			Name: "test",
+			// No Value and no Expr
+		}
+		result := evalAttr(attr)
+		if result != "<dynamic>" {
+			t.Errorf("evalAttr with no Value/Expr = %q, want %q", result, "<dynamic>")
+		}
+	})
 }

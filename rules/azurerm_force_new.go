@@ -164,8 +164,10 @@ func evalAttr(attr *hclext.Attribute) string {
 		return "<not set>"
 	}
 
-	// First check if we have a pre-evaluated Value (from gRPC serialization)
-	if attr.Value != cty.NilVal && !attr.Value.IsNull() {
+	// First check if we have a pre-evaluated Value (from gRPC serialization).
+	// We accept any non-NilVal, including null and unknown values which will
+	// be formatted appropriately by formatCtyValue.
+	if attr.Value != cty.NilVal {
 		return formatCtyValue(attr.Value)
 	}
 
