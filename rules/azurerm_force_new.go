@@ -143,34 +143,41 @@ func (r *AzurermForceNewRule) attributeChanged(oldAttr, newAttr *hclext.Attribut
 	}
 	// One nil, one not = change
 	if oldAttr == nil {
-		newVal := evalExpr(newAttr.Expr)
+		newVal := evalAttr(newAttr)
 		return true, "<not set>", newVal
 	}
 	if newAttr == nil {
-		oldVal := evalExpr(oldAttr.Expr)
+		oldVal := evalAttr(oldAttr)
 		return true, oldVal, "<not set>"
 	}
 
 	// Both present - compare evaluated values
-	oldVal := evalExpr(oldAttr.Expr)
-	newVal := evalExpr(newAttr.Expr)
+	oldVal := evalAttr(oldAttr)
+	newVal := evalAttr(newAttr)
 	return oldVal != newVal, oldVal, newVal
 }
 
-// evalExpr evaluates an HCL expression to a string representation.
-func evalExpr(expr hcl.Expression) string {
-	if expr == nil {
+// evalAttr evaluates an HCL attribute to a string representation.
+// Supports both direct expression evaluation (local runner) and pre-evaluated Value (gRPC).
+func evalAttr(attr *hclext.Attribute) string {
+	if attr == nil {
 		return "<not set>"
 	}
 
-	// Try to evaluate as a literal
-	val, diags := expr.Value(nil)
-	if diags.HasErrors() {
-		// Fall back to source range bytes if evaluation fails
-		return "<dynamic>"
+	// First check if we have a pre-evaluated Value (from gRPC serialization)
+	if attr.Value != cty.NilVal && !attr.Value.IsNull() {
+		return formatCtyValue(attr.Value)
 	}
 
-	return formatCtyValue(val)
+	// Fall back to expression evaluation (direct runner, not gRPC)
+	if attr.Expr != nil {
+		val, diags := attr.Expr.Value(nil)
+		if !diags.HasErrors() {
+			return formatCtyValue(val)
+		}
+	}
+
+	return "<dynamic>"
 }
 
 // formatCtyValue formats a cty.Value for display.
