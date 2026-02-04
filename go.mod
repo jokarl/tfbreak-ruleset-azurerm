@@ -1,10 +1,10 @@
 module github.com/jokarl/tfbreak-ruleset-azurerm
 
-go 1.24.0
+go 1.25.6
 
 require (
 	github.com/hashicorp/hcl/v2 v2.24.0
-	github.com/jokarl/tfbreak-plugin-sdk v0.2.1
+	github.com/jokarl/tfbreak-plugin-sdk v0.3.0
 	github.com/zclconf/go-cty v1.16.3
 )
 
@@ -31,5 +31,3 @@ require (
 	google.golang.org/grpc v1.78.0 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-replace github.com/jokarl/tfbreak-plugin-sdk => ../tfbreak-plugin-sdk
