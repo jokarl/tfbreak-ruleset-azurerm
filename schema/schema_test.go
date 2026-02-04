@@ -124,3 +124,176 @@ func TestLoadFromJSON_Invalid(t *testing.T) {
 		t.Error("Expected error for invalid JSON")
 	}
 }
+
+func TestSchema_GetResourceTypes(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource_a": {"block": {}},
+			"test_resource_b": {"block": {}},
+			"test_resource_c": {"block": {}}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	types := schema.GetResourceTypes()
+	if len(types) != 3 {
+		t.Errorf("Expected 3 resource types, got %d: %v", len(types), types)
+	}
+
+	// Convert to map for easier checking
+	typeMap := make(map[string]bool)
+	for _, rt := range types {
+		typeMap[rt] = true
+	}
+
+	if !typeMap["test_resource_a"] || !typeMap["test_resource_b"] || !typeMap["test_resource_c"] {
+		t.Errorf("Missing expected resource types in %v", types)
+	}
+}
+
+func TestSchema_GetForceNew_NestedBlocks(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource": {
+				"block": {
+					"attributes": {
+						"name": {"type": "string", "force_new": true}
+					},
+					"block_types": {
+						"nested_block": {
+							"nesting_mode": "list",
+							"block": {
+								"attributes": {
+									"nested_attr": {"type": "string", "force_new": true},
+									"other_attr": {"type": "string"}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	attrs := schema.GetForceNewAttributes("test_resource")
+
+	// Should have "name" and "nested_block.nested_attr"
+	attrMap := make(map[string]bool)
+	for _, a := range attrs {
+		attrMap[a] = true
+	}
+
+	if !attrMap["name"] {
+		t.Error("Expected 'name' in ForceNew attributes")
+	}
+	if !attrMap["nested_block.nested_attr"] {
+		t.Error("Expected 'nested_block.nested_attr' in ForceNew attributes")
+	}
+	if attrMap["nested_block.other_attr"] {
+		t.Error("Did not expect 'nested_block.other_attr' in ForceNew attributes")
+	}
+}
+
+func TestSchema_IsForceNew_NestedPath(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource": {
+				"block": {
+					"block_types": {
+						"nested": {
+							"nesting_mode": "list",
+							"block": {
+								"attributes": {
+									"force_new_attr": {"type": "string", "force_new": true}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	if !schema.IsForceNew("test_resource", "nested.force_new_attr") {
+		t.Error("Expected 'nested.force_new_attr' to be ForceNew")
+	}
+
+	// Asking for the block itself should return false
+	if schema.IsForceNew("test_resource", "nested") {
+		t.Error("Did not expect 'nested' (the block itself) to be ForceNew")
+	}
+}
+
+func TestSchema_GetForceNew_NilBlock(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource": {}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	attrs := schema.GetForceNewAttributes("test_resource")
+	if len(attrs) != 0 {
+		t.Errorf("Expected no attributes for resource with nil block, got %v", attrs)
+	}
+}
+
+func TestSchema_IsForceNew_NilBlock(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource": {}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	if schema.IsForceNew("test_resource", "any_attr") {
+		t.Error("Expected false for resource with nil block")
+	}
+}
+
+func TestSchema_IsForceNew_NilNestedBlock(t *testing.T) {
+	jsonData := []byte(`{
+		"resource_schemas": {
+			"test_resource": {
+				"block": {
+					"block_types": {
+						"nested": {
+							"nesting_mode": "list"
+						}
+					}
+				}
+			}
+		}
+	}`)
+
+	schema, err := LoadFromJSON(jsonData)
+	if err != nil {
+		t.Fatalf("LoadFromJSON failed: %v", err)
+	}
+
+	if schema.IsForceNew("test_resource", "nested.any_attr") {
+		t.Error("Expected false when nested block has nil Block field")
+	}
+}
