@@ -260,6 +260,188 @@ resource "azurerm_resource_group" "example" {
 }
 
 // =============================================================================
+// Unit tests for buildBodySchema and getAttributeByPath
+// =============================================================================
+
+func TestBuildBodySchema(t *testing.T) {
+	tests := []struct {
+		name      string
+		paths     []string
+		wantAttrs []string
+		wantBlocks map[string][]string // block name -> expected nested attrs
+	}{
+		{
+			name:       "top-level only",
+			paths:      []string{"location", "name"},
+			wantAttrs:  []string{"location", "name"},
+			wantBlocks: nil,
+		},
+		{
+			name:       "nested only",
+			paths:      []string{"identity.type", "identity.identity_ids"},
+			wantAttrs:  nil,
+			wantBlocks: map[string][]string{"identity": {"identity_ids", "type"}},
+		},
+		{
+			name:       "mixed top-level and nested",
+			paths:      []string{"location", "identity.type", "name"},
+			wantAttrs:  []string{"location", "name"},
+			wantBlocks: map[string][]string{"identity": {"type"}},
+		},
+		{
+			name:       "deeply nested",
+			paths:      []string{"identity.nested.deep_attr"},
+			wantAttrs:  nil,
+			wantBlocks: map[string][]string{"identity": nil}, // nested block check
+		},
+		{
+			name:       "empty",
+			paths:      []string{},
+			wantAttrs:  nil,
+			wantBlocks: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			schema := buildBodySchema(tt.paths)
+
+			// Check attributes
+			gotAttrs := make([]string, len(schema.Attributes))
+			for i, attr := range schema.Attributes {
+				gotAttrs[i] = attr.Name
+			}
+			if len(gotAttrs) != len(tt.wantAttrs) {
+				t.Errorf("got %d attrs, want %d: %v vs %v", len(gotAttrs), len(tt.wantAttrs), gotAttrs, tt.wantAttrs)
+			} else {
+				for i, want := range tt.wantAttrs {
+					if gotAttrs[i] != want {
+						t.Errorf("attr[%d] = %q, want %q", i, gotAttrs[i], want)
+					}
+				}
+			}
+
+			// Check blocks
+			if tt.wantBlocks == nil && len(schema.Blocks) > 0 {
+				t.Errorf("expected no blocks, got %d", len(schema.Blocks))
+			}
+			for blockName, wantNestedAttrs := range tt.wantBlocks {
+				found := false
+				for _, block := range schema.Blocks {
+					if block.Type == blockName {
+						found = true
+						if wantNestedAttrs != nil && block.Body != nil {
+							gotNestedAttrs := make([]string, len(block.Body.Attributes))
+							for i, attr := range block.Body.Attributes {
+								gotNestedAttrs[i] = attr.Name
+							}
+							if len(gotNestedAttrs) != len(wantNestedAttrs) {
+								t.Errorf("block %q: got %d nested attrs, want %d", blockName, len(gotNestedAttrs), len(wantNestedAttrs))
+							}
+						}
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected block %q not found", blockName)
+				}
+			}
+		})
+	}
+}
+
+func TestGetAttributeByPath(t *testing.T) {
+	// Build a test block structure:
+	// block {
+	//   location = "westeurope"
+	//   identity {
+	//     type = "SystemAssigned"
+	//   }
+	// }
+	testBlock := &hclext.Block{
+		Type:   "azurerm_resource_group",
+		Labels: []string{"azurerm_resource_group", "example"},
+		Body: &hclext.BodyContent{
+			Attributes: map[string]*hclext.Attribute{
+				"location": {Name: "location", Value: cty.StringVal("westeurope")},
+			},
+			Blocks: []*hclext.Block{
+				{
+					Type: "identity",
+					Body: &hclext.BodyContent{
+						Attributes: map[string]*hclext.Attribute{
+							"type": {Name: "type", Value: cty.StringVal("SystemAssigned")},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name     string
+		block    *hclext.Block
+		path     string
+		wantName string
+		wantNil  bool
+	}{
+		{
+			name:     "top-level attribute",
+			block:    testBlock,
+			path:     "location",
+			wantName: "location",
+		},
+		{
+			name:     "nested attribute",
+			block:    testBlock,
+			path:     "identity.type",
+			wantName: "type",
+		},
+		{
+			name:    "missing top-level attribute",
+			block:   testBlock,
+			path:    "nonexistent",
+			wantNil: true,
+		},
+		{
+			name:    "missing nested block",
+			block:   testBlock,
+			path:    "nonexistent.attr",
+			wantNil: true,
+		},
+		{
+			name:    "nil block",
+			block:   nil,
+			path:    "location",
+			wantNil: true,
+		},
+		{
+			name:    "block with nil body",
+			block:   &hclext.Block{Type: "test"},
+			path:    "location",
+			wantNil: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			attr := getAttributeByPath(tt.block, tt.path)
+			if tt.wantNil {
+				if attr != nil {
+					t.Errorf("expected nil, got attribute %q", attr.Name)
+				}
+			} else {
+				if attr == nil {
+					t.Errorf("expected attribute %q, got nil", tt.wantName)
+				} else if attr.Name != tt.wantName {
+					t.Errorf("got attribute %q, want %q", attr.Name, tt.wantName)
+				}
+			}
+		})
+	}
+}
+
+// =============================================================================
 // Unit tests for helper functions
 // =============================================================================
 

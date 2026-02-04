@@ -3,6 +3,7 @@ package rules
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/hashicorp/hcl/v2"
@@ -63,12 +64,8 @@ func (r *AzurermForceNewRule) Check(runner tflint.Runner) error {
 			continue
 		}
 
-		// Build schema for the ForceNew attributes
-		attrSchemas := make([]hclext.AttributeSchema, len(forceNewAttrs))
-		for i, attr := range forceNewAttrs {
-			attrSchemas[i] = hclext.AttributeSchema{Name: attr}
-		}
-		bodySchema := &hclext.BodySchema{Attributes: attrSchemas}
+		// Build schema for the ForceNew attributes, including nested blocks
+		bodySchema := buildBodySchema(forceNewAttrs)
 
 		// Get old and new content for this resource type
 		oldContent, err := runner.GetOldResourceContent(resourceType, bodySchema, nil)
@@ -100,14 +97,9 @@ func (r *AzurermForceNewRule) Check(runner tflint.Runner) error {
 			}
 
 			// Check each ForceNew attribute
-			for _, attr := range forceNewAttrs {
-				var oldAttr, newAttr *hclext.Attribute
-				if oldBlock.Body != nil {
-					oldAttr = oldBlock.Body.Attributes[attr]
-				}
-				if newBlock.Body != nil {
-					newAttr = newBlock.Body.Attributes[attr]
-				}
+			for _, attrPath := range forceNewAttrs {
+				oldAttr := getAttributeByPath(oldBlock, attrPath)
+				newAttr := getAttributeByPath(newBlock, attrPath)
 
 				changed, oldVal, newVal := r.attributeChanged(oldAttr, newAttr)
 				if changed {
@@ -115,7 +107,7 @@ func (r *AzurermForceNewRule) Check(runner tflint.Runner) error {
 					message := fmt.Sprintf(
 						"Changing %q forces recreation of %s.%s (old: %s, new: %s). "+
 							"Consider using a moved block or creating a new resource with a different name.",
-						attr, resourceType, name, formatValue(oldVal), formatValue(newVal),
+						attrPath, resourceType, name, formatValue(oldVal), formatValue(newVal),
 					)
 					issueRange := hcl.Range{}
 					if newAttr != nil {
@@ -128,6 +120,82 @@ func (r *AzurermForceNewRule) Check(runner tflint.Runner) error {
 					}
 				}
 			}
+		}
+	}
+
+	return nil
+}
+
+// buildBodySchema creates a BodySchema that can retrieve both top-level attributes
+// and nested block attributes from ForceNew attribute paths.
+// Paths like "location" become top-level attributes.
+// Paths like "identity.type" become nested block schemas with attributes.
+func buildBodySchema(attrPaths []string) *hclext.BodySchema {
+	schema := &hclext.BodySchema{}
+
+	// Group attributes by their path structure
+	topLevel := make(map[string]bool)
+	nestedBlocks := make(map[string][]string) // block name -> list of sub-paths
+
+	for _, path := range attrPaths {
+		parts := strings.SplitN(path, ".", 2)
+		if len(parts) == 1 {
+			// Top-level attribute
+			topLevel[parts[0]] = true
+		} else {
+			// Nested: first part is block name, rest is the path within
+			blockName := parts[0]
+			subPath := parts[1]
+			nestedBlocks[blockName] = append(nestedBlocks[blockName], subPath)
+		}
+	}
+
+	// Add top-level attributes
+	for name := range topLevel {
+		schema.Attributes = append(schema.Attributes, hclext.AttributeSchema{Name: name})
+	}
+
+	// Add nested blocks recursively
+	for blockName, subPaths := range nestedBlocks {
+		blockSchema := hclext.BlockSchema{
+			Type: blockName,
+			Body: buildBodySchema(subPaths),
+		}
+		schema.Blocks = append(schema.Blocks, blockSchema)
+	}
+
+	// Sort for deterministic ordering
+	sort.Slice(schema.Attributes, func(i, j int) bool {
+		return schema.Attributes[i].Name < schema.Attributes[j].Name
+	})
+	sort.Slice(schema.Blocks, func(i, j int) bool {
+		return schema.Blocks[i].Type < schema.Blocks[j].Type
+	})
+
+	return schema
+}
+
+// getAttributeByPath retrieves an attribute from a block using a dot-separated path.
+// For "location", it returns block.Body.Attributes["location"].
+// For "identity.type", it navigates to the identity block and returns its "type" attribute.
+func getAttributeByPath(block *hclext.Block, path string) *hclext.Attribute {
+	if block == nil || block.Body == nil {
+		return nil
+	}
+
+	parts := strings.SplitN(path, ".", 2)
+	name := parts[0]
+
+	if len(parts) == 1 {
+		// Direct attribute lookup
+		return block.Body.Attributes[name]
+	}
+
+	// Need to navigate into a nested block
+	subPath := parts[1]
+	for _, nestedBlock := range block.Body.Blocks {
+		if nestedBlock.Type == name {
+			return getAttributeByPath(nestedBlock, subPath)
 		}
 	}
 
